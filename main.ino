@@ -9,8 +9,8 @@
 
 uint32_t state = 1;
 uint32_t pattern = 1;
-uint32_t color = 1;
-uint32_t dimm = 127;
+uint32_t color = 50;
+uint32_t dimm = 30000;
 uint32_t speed = 1000;
 uint32_t device_id = 0;
 
@@ -24,6 +24,7 @@ const char* password = "lichtundlaessig!";
 #endif
 
 #ifdef USE_WS2811FX
+#include "colors.h"
 #include <WS2812FX.h>
 #define LED_PIN   D5
 #define LED_COUNT 300
@@ -38,9 +39,32 @@ PubSubClient client(espClient);
 const char* mqtt_server = "192.168.0.2";
 
 void callback(char* topic, byte* payload, unsigned int length) {
-	Serial.print("Message arrived [");
-	Serial.print(topic);
-	Serial.print("] ");
+	if(strstr(topic, "LLShield") != NULL){
+		if(strstr(topic, "Dimm") != NULL){
+			char value[20];
+			strncpy(value, (char*)payload, length);
+			dimm = atoi(value);
+			Serial.printf("Dimm %u %u\n", dimm ,get_color(color));
+		}
+		if(strstr(topic, "Pattern") != NULL){
+			char value[20];
+			strncpy(value, (char*)payload, length);
+			pattern = atoi(value);
+			Serial.printf("Pattern %u %u\n", pattern , (uint32_t)(pattern / 65535.0 * 56));
+		}
+		if(strstr(topic, "Color") != NULL){
+			char value[20];
+			strncpy(value, (char*)payload, length);
+			color = atoi(value);
+			Serial.printf("Color %u 0x%X\n", color ,get_color(color));
+		}
+		if(strstr(topic, "Speed") != NULL){
+			char value[20];
+			strncpy(value, (char*)payload, length);
+			speed = atoi(value);
+			Serial.printf("Speed %u %u\n", speed ,get_color(color));
+		}
+	}
 }
 
 void reconnect() {
@@ -62,6 +86,15 @@ void reconnect() {
 		}
 	}
 }
+#endif
+
+#ifdef USE_UDP
+#include "Protocol.h"
+#define MAX_PACKET_SIZE 32
+IPAddress remoteIP;
+unsigned int remotePort = 1103;
+char recvBuffer[MAX_PACKET_SIZE];
+WiFiUDP Udp;
 #endif
 
 void setup() {
@@ -125,6 +158,14 @@ void setup() {
 	client.setCallback(callback);
 	device_id = ESP8266TrueRandom.random(0, 10000);
 #endif
+#ifdef USE_UDP
+	Udp.begin(remotePort);
+
+		//Receivebuffer
+		for (int i = 0; i < MAX_PACKET_SIZE; i++) {
+			recvBuffer[i] = '0';
+	}
+#endif
 }
 
 void loop() {
@@ -133,6 +174,14 @@ void loop() {
 #endif
 
 #ifdef USE_WS2811FX
+	uint32_t mode = (uint32_t)(pattern / 65535.0 * (MODE_COUNT -1));
+	ws2812fx.setBrightness(dimm / 65535.0 * 255);
+	ws2812fx.setSegment(0, 0, 50, mode, get_color(color), speed, false);
+	ws2812fx.setSegment(1, 51, 101, mode, get_color(color), speed, false);
+	ws2812fx.setSegment(2, 102, 152, mode, get_color(color), speed, false);
+	ws2812fx.setSegment(3, 153, 203, mode, get_color(color), speed, false);
+	ws2812fx.setSegment(4, 204, 254, mode, get_color(color), speed, false);
+	ws2812fx.setSegment(5, 255, 305, mode, get_color(color), speed, false);
 	ws2812fx.service();
 #endif
 
@@ -142,4 +191,30 @@ void loop() {
 	}
 	client.loop();
 #endif
+
+#ifdef USE_UDP
+	uint32_t packetSize = Udp.parsePacket();
+	synchronisingMessage syncMesg;
+	remoteIP = Udp.remoteIP();
+
+	if (packetSize > 0) {
+	if (packetSize <= MAX_PACKET_SIZE) {
+
+		Udp.read(recvBuffer, packetSize);
+		//Serial.print(recvBuffer);
+		//Checke ob Synchronisierungspacket
+		if (synchronising(recvBuffer, packetSize)) {
+			syncMesg.create(recvBuffer, packetSize);
+			if (syncMesg.direction == '0') {
+				//Serial.println("BEAT");
+				ws2812fx.trigger();
+
+			}
+		}
+	}
+	}
+#endif
+
+
+
 }
